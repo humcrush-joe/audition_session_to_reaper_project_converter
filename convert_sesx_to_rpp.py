@@ -23,6 +23,14 @@ def extract_xmp_metadata(sesx_file):
     if match is None:
         return None
     inner = match.group(1).strip()
+    # Unwrap CDATA, which real Audition files use around the XMP packet
+    if inner.startswith('<![CDATA['):
+        inner = inner[len('<![CDATA['):]
+        if inner.endswith(']]>'):
+            inner = inner[:-len(']]>')]
+        inner = inner.strip()
+    # Strip BOM (real Audition files embed one at the start of the packet)
+    inner = inner.lstrip('\ufeff')
     if not inner:
         return None
     if '<' not in inner:
@@ -139,6 +147,13 @@ def convert_sesx_to_rpp(sesx_file):
                 file_id = audio_clip.get('fileID')
                 file_element = root.find(f".//file[@id='{file_id}']")
                 file_path = file_element.get('absolutePath')
+                # Sessions copied between machines keep stale absolute paths;
+                # resolve relativePath against the session directory instead
+                relative_path = file_element.get('relativePath')
+                if relative_path and not os.path.exists(file_path):
+                    candidate = os.path.join(os.path.dirname(os.path.abspath(sesx_file)), relative_path)
+                    if os.path.exists(candidate):
+                        file_path = candidate
                 file_extension = os.path.splitext(file_path)[1][1:].upper()  
                 file_format = get_source_format(file_extension)
 
@@ -202,9 +217,11 @@ def get_source_format(file_extension):
 def get_track_audio_param(audio_params, param_name):
     # Initialize default value
     param_value = audio_params.get(param_name, 0)
-    if param_value != 0:
-        if param_value == "true":
-            param_value = 1 
+    # SESX stores these as XML booleans ("true"/"false"), Reaper needs ints
+    if param_value == "true":
+        param_value = 1
+    elif param_value == "false":
+        param_value = 0
     return param_value
 
 def get_volume_mute_pan(audio_element):
