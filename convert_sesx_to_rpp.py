@@ -1,6 +1,8 @@
 import xml.etree.ElementTree as ET
 import sys
 import os
+import re
+import base64
 import colorsys
 import rpp
 import uuid
@@ -10,6 +12,26 @@ xmpNS = {
     'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
     'xmp': 'http://ns.adobe.com/xap/1.0/'
 }
+
+def extract_xmp_metadata(sesx_file):
+    # Return the XMP packet text from <xmpMetadata>, or None if absent.
+    # Works with both raw XML packets (with <?xpacket?> processing
+    # instructions) and base64-encoded packets.
+    with open(sesx_file, 'r', encoding='utf-8', errors='replace') as f:
+        raw = f.read()
+    match = re.search(r'<xmpMetadata[^>]*>(.*?)</xmpMetadata>', raw, re.DOTALL)
+    if match is None:
+        return None
+    inner = match.group(1).strip()
+    if not inner:
+        return None
+    if '<' not in inner:
+        # Not XML markup: assume base64-encoded XMP packet
+        try:
+            inner = base64.b64decode(inner).decode('utf-8', errors='replace')
+        except (ValueError, TypeError):
+            return None
+    return inner
 
 def convert_sesx_to_rpp(sesx_file):
     # Parse the SESX file
@@ -24,7 +46,11 @@ def convert_sesx_to_rpp(sesx_file):
     sample_rate = int(session.get('sampleRate', 48000))  # Default to 48000 if not found
 
     # Get markers and regions
-    xmp_text = root.findtext('.//xmpMetadata')
+    # The XMP packet inside <xmpMetadata> contains XML processing instructions
+    # (<?xpacket ...?>), which ElementTree does not keep in element text, so
+    # extract the raw inner text from the file instead. Real Audition files
+    # may also store the packet base64-encoded.
+    xmp_text = extract_xmp_metadata(sesx_file)
     if xmp_text is None:
         sesx_markers = []
         sesx_regions = []
